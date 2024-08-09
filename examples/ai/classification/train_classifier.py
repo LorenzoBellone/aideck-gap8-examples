@@ -25,7 +25,7 @@ import os
 
 import numpy as np
 import tensorflow as tf
-import PIL.Image
+from PIL import Image, ImageFilter, ImageEnhance
 import scipy
 
 def parse_args():
@@ -57,6 +57,50 @@ def parse_args():
 
     return args.parse_args()
 
+def add_gaussian_blur(image):
+    image = Image.fromarray(np.squeeze(image, axis=2).astype(np.uint8))
+    image = image.filter(ImageFilter.GaussianBlur(radius=2))
+    return np.array(image, dtype=np.float32)
+
+def add_gaussian_noise(image):
+    noise = np.random.normal(0, 2.0, image.shape).astype(np.float32)  # Adjust stddev for appropriate noise level
+    image = image + noise
+    image = np.clip(image, 0, 255)
+    return image
+
+def random_crop_and_resize(image):
+    height, width = image.shape
+    cropped_height = int(0.9 * height)
+    cropped_width = int(0.9 * width)
+    start_x = np.random.randint(0, width - cropped_width + 1)
+    start_y = np.random.randint(0, height - cropped_height + 1)
+    cropped_image = image[start_y:start_y+cropped_height, start_x:start_x+cropped_width]
+    resized_image = np.array(Image.fromarray(cropped_image.astype(np.uint8)).resize((width, height)), dtype=np.float32)
+    return resized_image
+
+def add_vignetting(image):
+    image = Image.fromarray(image.astype(np.uint8))
+    width, height = image.size
+    
+    # Create a vignette mask
+    vignette = Image.new('L', (width, height), 0)
+    for x in range(width):
+        for y in range(height):
+            dx = x - width / 2
+            dy = y - height / 2
+            d = np.sqrt(dx*dx + dy*dy)
+            vignette.putpixel((x, y), int(255 - (255 * (d / (width / 2)))))
+    
+    # Apply the vignette mask
+    image = ImageEnhance.Brightness(image).enhance(0.8)
+    image.putalpha(vignette)
+    return np.array(image, dtype=np.float32)
+
+def composite_preprocessing_function(image):
+    image = add_gaussian_blur(image)
+    image = add_gaussian_noise(image)
+    image = random_crop_and_resize(image)
+    return np.expand_dims(image, axis=2)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -75,21 +119,39 @@ if __name__ == "__main__":
         rotation_range=10,
         shear_range=0.2,
         zoom_range=0.1,
-        horizontal_flip=True,
-        brightness_range=[0.5, 1.5],
+        horizontal_flip=False,
+        brightness_range=[0.1, 1.5],
+        preprocessing_function=composite_preprocessing_function,
     )
+
     train_generator = train_datagen.flow_from_directory(
         f"{DATASET_PATH}/train",
-        target_size=(args.image_width, args.image_height),
+        target_size=(args.image_height, args.image_width),
         batch_size=args.batch_size,
         class_mode="categorical",
         color_mode="grayscale",
     )
 
+    # Retrieve a batch of augmented images
+    augmented_images, _ = next(train_generator)
+
+    # Save the augmented images to the current directory
+    output_dir = './augmented_images'
+    os.makedirs(output_dir, exist_ok=True)
+
+    for i, img in enumerate(augmented_images):
+        img = img.astype(np.uint8)
+        img = Image.fromarray(np.squeeze(img, axis=2))
+        img.save(os.path.join(output_dir, f'augmented_image_{i}.png'))
+
+    print(f'Saved {len(augmented_images)} augmented images to {output_dir}')
+
+    import ipdb; ipdb.set_trace()
+
     val_datagen = tf.keras.preprocessing.image.ImageDataGenerator()
     val_generator = val_datagen.flow_from_directory(
         f"{DATASET_PATH}/validation",
-        target_size=(args.image_width, args.image_height),
+        target_size=(args.image_height, args.image_width),
         batch_size=args.batch_size,
         class_mode="categorical",
         color_mode="grayscale",
@@ -113,7 +175,7 @@ if __name__ == "__main__":
     # Add a custom head, which will predict the classes
     model = tf.keras.Sequential(
         [
-            tf.keras.Input(shape=(args.image_width, args.image_height, 1)),
+            tf.keras.Input(shape=(args.image_height, args.image_width, 1)),
             tf.keras.layers.SeparableConvolution2D(
                 filters=3,
                 kernel_size=1,
@@ -130,7 +192,7 @@ if __name__ == "__main__":
             ),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.GlobalAveragePooling2D(),
-            tf.keras.layers.Dense(units=2, activation="softmax"),
+            tf.keras.layers.Dense(units=4, activation="softmax"),
         ]
     )
 
@@ -199,7 +261,7 @@ if __name__ == "__main__":
             image = tf.io.read_file(image)
             image = tf.io.decode_jpeg(image, channels=1)
             image = tf.image.resize(
-                image, [args.image_width, args.image_height]
+                image, [args.image_height, args.image_width]
             )
             image = tf.cast(image, tf.float32)
             image = tf.expand_dims(image, 0)

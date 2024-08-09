@@ -38,6 +38,7 @@
 
 #define CAM_WIDTH 324
 #define CAM_HEIGHT 244
+#define NUM_CLASSES 4
 
 #define CHANNELS 1
 #define IO RGB888_IO
@@ -61,6 +62,12 @@ AT_HYPERFLASH_FS_EXT_ADDR_TYPE __PREFIX(_L3_Flash) = 0;
 
 #define IMG_ORIENTATION 0x0101
 
+const char *class_names[NUM_CLASSES] = {
+    "left",
+    "right",
+    "straight",
+    "turn_around"
+};
 
 static void RunNetwork()
 {
@@ -76,14 +83,24 @@ static void cam_handler(void *arg)
   /* Run inference */
   pi_cluster_send_task_to_cl(&cluster_dev, task);
 
-  if (Output_1[0] > Output_1[1])
+
+  // Find the class with the highest confidence
+  int max_index = 0;
+  
+  signed short max_confidence = Output_1[0];
+  for (int i = 1; i < NUM_CLASSES; i++)
   {
-    cpxPrintToConsole(LOG_TO_CRTP, "Packet,     confidence: %hd\n", Output_1[0] - Output_1[1]);
+      if (Output_1[i] > max_confidence)
+      {
+          max_confidence = Output_1[i];
+          max_index = i;
+      }
   }
-  else
-  {
-    cpxPrintToConsole(LOG_TO_CRTP, "Background, confidence: %hd\n", Output_1[1] - Output_1[0]);
-  }
+
+
+
+  cpxPrintToConsole(LOG_TO_CRTP, "Class %s, confidence: %hd\n", class_names[max_index], max_confidence);
+  cpxPrintToConsole(LOG_TO_CRTP, "Other classes: %hd, %hd, %hd, %hd", Output_1[0], Output_1[1], Output_1[2], Output_1[3]);
 
   pi_camera_capture_async(&camera, cameraBuffer, CAM_WIDTH * CAM_HEIGHT, pi_task_callback(&task1, cam_handler, NULL));
   pi_camera_control(&camera, PI_CAMERA_CMD_START, 0);
@@ -189,7 +206,7 @@ int classification()
   }
   cpxPrintToConsole(LOG_TO_CRTP, "Allocated memory for camera buffer\n");
 
-  Output_1 = (signed short *)pmsis_l2_malloc(2 * sizeof(signed short));
+  Output_1 = (signed short *)pmsis_l2_malloc(NUM_CLASSES * sizeof(signed short));
   if (Output_1 == NULL)
   {
     cpxPrintToConsole(LOG_TO_CRTP, "Failed to allocate memory for output\n");
