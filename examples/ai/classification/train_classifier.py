@@ -226,7 +226,7 @@ if __name__ == "__main__":
         build_model,
         objective='val_accuracy',
         max_trials=10,
-        execution_per_trial=1,
+        executions_per_trial=1,
         directory='tuner_dir',
         project_name='mobile_net_v2_tuning',
         overwrite=True
