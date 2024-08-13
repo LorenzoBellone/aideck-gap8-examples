@@ -27,6 +27,7 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image, ImageFilter, ImageEnhance
 import scipy
+from sklearn.utils import class_weight
 
 def parse_args():
     args = argparse.ArgumentParser(
@@ -132,6 +133,14 @@ if __name__ == "__main__":
         color_mode="grayscale",
     )
 
+    class_weights = class_weight.compute_class_weight(
+	class_weight='balanced',
+	classes=np.unique(train_generator.classes),
+	y=train_generator.classes
+    )
+
+    class_weights_dict = dict(enumerate(class_weights))
+
     # Retrieve a batch of augmented images
     augmented_images, _ = next(train_generator)
 
@@ -145,8 +154,6 @@ if __name__ == "__main__":
         img.save(os.path.join(output_dir, f'augmented_image_{i}.png'))
 
     print(f'Saved {len(augmented_images)} augmented images to {output_dir}')
-
-    import ipdb; ipdb.set_trace()
 
     val_datagen = tf.keras.preprocessing.image.ImageDataGenerator()
     val_generator = val_datagen.flow_from_directory(
@@ -197,7 +204,7 @@ if __name__ == "__main__":
     )
 
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(1e-5),
+        optimizer=tf.keras.optimizers.Adam(1e-4),
         loss="categorical_crossentropy",
         metrics=["accuracy"],
     )
@@ -215,6 +222,7 @@ if __name__ == "__main__":
         epochs=args.epochs,
         validation_data=val_generator,
         validation_steps=len(val_generator),
+        class_weight=class_weights_dict
     )
 
     # Fine-tune the model
@@ -245,6 +253,7 @@ if __name__ == "__main__":
         epochs=args.finetune_epochs,
         validation_data=val_generator,
         validation_steps=len(val_generator),
+	class_weight=class_weights_dict
     )
 
     # Convert to TensorFlow lite
