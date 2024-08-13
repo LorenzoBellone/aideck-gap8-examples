@@ -1,6 +1,6 @@
 import argparse
 import os
-
+from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
 
@@ -21,6 +21,7 @@ def parse_args():
     args.add_argument(
         "--image_height", dest="image_height", type=int, default=244
     )
+    args.add_argument("--batch_size", dest="batch_size", type=int, default=8)
 
     return args.parse_args()
 
@@ -42,6 +43,18 @@ def classify_image(interpreter, input):
     return top_1
 
 if __name__ =="__main__":
+    args = parse_args()
+
+    ROOT_PATH = (
+        f"{os.path.abspath(os.curdir)}/GAP8/ai_examples/classification/"
+    )
+    DATASET_PATH = f"{ROOT_PATH}{args.dataset_path}"
+    if not os.path.exists(DATASET_PATH):
+        ROOT_PATH = "./"
+        DATASET_PATH = args.dataset_path
+    if not os.path.exists(DATASET_PATH):
+        raise ValueError(f"Dataset path '{DATASET_PATH}' does not exist.")
+    print(DATASET_PATH + "/*/*/*")
 
     val_datagen = tf.keras.preprocessing.image.ImageDataGenerator()
     val_generator = val_datagen.flow_from_directory(
@@ -53,22 +66,30 @@ if __name__ =="__main__":
     )
     
     interpreter = tf.lite.Interpreter(
-        f"{ROOT_PATH}/model/classification.tflite"
+        f"{ROOT_PATH}/model/classification_q.tflite"
     )
     interpreter.allocate_tensors()
 
-    batch_images, batch_labels = next(val_generator)
+    # Initialize the accuracy metric
+    overall_accuracy = tf.keras.metrics.Accuracy()
 
-    # Collect all inference predictions in a list
-    batch_prediction = []
-    batch_truth = np.argmax(batch_labels, axis=1)
+    # Loop over the entire validation set
+    for _ in tqdm(range(len(val_generator))):
 
-    for i in range(len(batch_images)):
-        prediction = classify_image(interpreter, batch_images[i])
-        batch_prediction.append(prediction)
+        batch_images, batch_labels = next(val_generator)
 
-    # Compare all predictions to the ground truth
-    tflite_accuracy = tf.keras.metrics.Accuracy()
-    tflite_accuracy(batch_prediction, batch_truth)
-    print("TF Lite accuracy: {:.3%}".format(tflite_accuracy.result()))
+        # Collect predictions for the current batch
+        batch_prediction = []
+        batch_truth = np.argmax(batch_labels, axis=1)
+
+        for i in range(len(batch_images)):
+            prediction = classify_image(interpreter, batch_images[i])
+            batch_prediction.append(prediction)
+
+        # Update the accuracy metric with the current batch
+        overall_accuracy.update_state(batch_prediction, batch_truth)
+
+    # Get the final accuracy over the entire validation set
+    final_accuracy = overall_accuracy.result().numpy()
+    print("TF Lite accuracy: {:.3%}".format(final_accuracy))
 
