@@ -3,6 +3,7 @@ import os
 from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
+from PIL import Image,ImageDraw, ImageFont
 
 def parse_args():
     args = argparse.ArgumentParser(
@@ -70,11 +71,14 @@ if __name__ =="__main__":
     )
     interpreter.allocate_tensors()
 
+    save_dir = 'validation_results'
+    os.makedirs(save_dir, exist_ok=True)
+
     # Initialize the accuracy metric
     overall_accuracy = tf.keras.metrics.Accuracy()
 
     # Loop over the entire validation set
-    for _ in tqdm(range(len(val_generator))):
+    for i in tqdm(range(len(val_generator))):
 
         batch_images, batch_labels = next(val_generator)
 
@@ -82,9 +86,26 @@ if __name__ =="__main__":
         batch_prediction = []
         batch_truth = np.argmax(batch_labels, axis=1)
 
-        for i in range(len(batch_images)):
-            prediction = classify_image(interpreter, batch_images[i])
+        for j in range(len(batch_images)):
+            prediction = classify_image(interpreter, batch_images[j])
             batch_prediction.append(prediction)
+
+            if i == 0:
+                image = Image.fromarray((batch_images[j]).astype(np.uint8).squeeze())
+                draw = ImageDraw.Draw(image)
+                font = ImageFont.load_default()
+
+                # Prepare the text
+                pred_text = f"Predicted: {prediction}"
+                truth_text = f"Truth: {batch_truth[j]}"
+
+                # Define text position
+                text_position = (10, 10)  # top-left corner
+                draw.text(text_position, f"{pred_text}, {truth_text}", fill="white", font=font)
+
+                # Save the image with a unique name
+                image_name = f'image_{i}_{j}.png'
+                image.save(os.path.join(save_dir, image_name))
 
         # Update the accuracy metric with the current batch
         overall_accuracy.update_state(batch_prediction, batch_truth)
