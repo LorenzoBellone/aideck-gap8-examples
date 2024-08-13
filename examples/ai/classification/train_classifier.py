@@ -25,6 +25,9 @@ import os
 
 import numpy as np
 import tensorflow as tf
+from kerastuner import HyperModel
+from kerastuner.tuners import RandomSearch
+from kerastuner.engine.hyperparameters import HyperParameters
 from PIL import Image, ImageFilter, ImageEnhance
 import scipy
 from sklearn.utils import class_weight
@@ -166,57 +169,83 @@ if __name__ == "__main__":
 
     FIRST_LAYER_STRIDE = 2
 
-    # Create the base model from the pre-trained MobileNet V2
-    base_model = tf.keras.applications.MobileNetV2(
-        input_shape=(
-            96,
-            96,
-            3,
-        ),
-        include_top=False,
-        weights="imagenet",
-        alpha=0.35,
-    )
-    base_model.trainable = False
-
-    # Add a custom head, which will predict the classes
-    model = tf.keras.Sequential(
-        [
-            tf.keras.Input(shape=(args.image_height, args.image_width, 1)),
-            tf.keras.layers.SeparableConvolution2D(
-                filters=3,
-                kernel_size=1,
-                # activation="relu",
-                activation=None,
-                strides=FIRST_LAYER_STRIDE,
+    def build_model(hp):
+        # Create the base model from the pre-trained MobileNet V2
+        base_model = tf.keras.applications.MobileNetV2(
+            input_shape=(
+                96,
+                96,
+                3,
             ),
-            tf.keras.layers.experimental.preprocessing.Resizing(
-                96, 96, interpolation="bilinear"
+            include_top=False,
+            weights="imagenet",
+            alpha=0.35,
+        )
+        base_model.trainable = True
+
+        # Add a custom head, which will predict the classes
+        model = tf.keras.Sequential(
+            [
+                tf.keras.Input(shape=(args.image_height, args.image_width, 1)),
+                tf.keras.layers.SeparableConvolution2D(
+                    filters=3,
+                    kernel_size=1,
+                    # activation="relu",
+                    activation=None,
+                    strides=FIRST_LAYER_STRIDE,
+                ),
+                tf.keras.layers.experimental.preprocessing.Resizing(
+                    96, 96, interpolation="bilinear"
+                ),
+                base_model,
+                tf.keras.layers.SeparableConvolution2D(
+                    filters=32, kernel_size=3, activation="relu"
+                ),
+                tf.keras.layers.Dropout(hp.Float('dropout', min_value=0.2, max_value=0.5, step=0.1)),
+                tf.keras.layers.GlobalAveragePooling2D(),
+                tf.keras.layers.Dense(units=4, activation="softmax"),
+            ]
+        )
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(
+                hp.Float('learning_rate', min_value=5e-5, max_value=1e-3, sampling='log')
             ),
-            base_model,
-            tf.keras.layers.SeparableConvolution2D(
-                filters=32, kernel_size=3, activation="relu"
-            ),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.GlobalAveragePooling2D(),
-            tf.keras.layers.Dense(units=4, activation="softmax"),
-        ]
+            loss="categorical_crossentropy",
+            metrics=["accuracy"],
+        )
+
+        model.summary()
+
+        print(
+            "Number of trainable weights = {}".format(len(model.trainable_weights))
+        )
+        return model
+
+    tuner = RandomSearch(
+        build_model,
+        objective='val_accuracy',
+        max_trials=10,
+        execution_per_trial=1,
+        directory='tuner_dir',
+        project_name='mobile_net_v2_tuning',
+        overwrite=True
     )
 
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(1e-4),
-        loss="categorical_crossentropy",
-        metrics=["accuracy"],
+    tuner.search(
+        x=train_generator,
+        steps_per_epoch=len(train_generator),
+        epochs=args.epochs,
+        validation_data=val_generator,
+        validation_steps=len(val_generator),
+        class_weight=class_weights_dict,
     )
 
-    model.summary()
-
-    print(
-        "Number of trainable weights = {}".format(len(model.trainable_weights))
-    )
+    # Retrieve the best model found during the search
+    best_model = tuner.get_best_models(num_models=1)[0]
 
     # Train the custom head
-    history = model.fit(
+    history = best_model.fit(
         train_generator,
         steps_per_epoch=len(train_generator),
         epochs=args.epochs,
@@ -224,7 +253,10 @@ if __name__ == "__main__":
         validation_steps=len(val_generator),
         class_weight=class_weights_dict
     )
-
+    # Print the best hyperparameters found
+    best_hyperparameters = tuner.get_best_hyperparameters(num_trials=1)[0]
+    print(f"Best hyperparameters: {best_hyperparameters.values}")
+    
     # Fine-tune the model
     print("Number of layers in the base model: ", len(base_model.layers))
 
@@ -235,7 +267,7 @@ if __name__ == "__main__":
     for layer in base_model.layers[:fine_tune_at]:
         layer.trainable = False
 
-    model.compile(
+    best_model.compile(
         optimizer=tf.keras.optimizers.Adam(5e-5),
         loss="categorical_crossentropy",
         metrics=["accuracy"],
@@ -247,7 +279,7 @@ if __name__ == "__main__":
         "Number of trainable weights = {}".format(len(model.trainable_weights))
     )
 
-    history_fine = model.fit(
+    history_fine = best_model.fit(
         train_generator,
         steps_per_epoch=len(train_generator),
         epochs=args.finetune_epochs,
@@ -257,7 +289,7 @@ if __name__ == "__main__":
     )
 
     # Convert to TensorFlow lite
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    converter = tf.lite.TFLiteConverter.from_keras_model(best_model)
     tflite_model = converter.convert()
 
     with open(f"{ROOT_PATH}/model/classification.tflite", "wb") as f:
@@ -276,7 +308,7 @@ if __name__ == "__main__":
             image = tf.expand_dims(image, 0)
             yield [image]
 
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    converter = tf.lite.TFLiteConverter.from_keras_model(best_model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     converter.representative_dataset = representative_data_gen
     converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
@@ -292,7 +324,7 @@ if __name__ == "__main__":
 
     batch_images, batch_labels = next(val_generator)
 
-    logits = model(batch_images)
+    logits = best_model(batch_images)
     prediction = np.argmax(logits, axis=1)
     truth = np.argmax(batch_labels, axis=1)
 
