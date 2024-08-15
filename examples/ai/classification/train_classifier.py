@@ -40,9 +40,6 @@ def parse_args():
 
     args.add_argument("--epochs", dest="epochs", type=int, default=20)
     args.add_argument(
-        "--finetune_epochs", dest="finetune_epochs", type=int, default=20
-    )
-    args.add_argument(
         "--dataset_path",
         metavar="dataset_path",
         help="path to dataset",
@@ -225,7 +222,7 @@ if __name__ == "__main__":
     tuner = RandomSearch(
         build_model,
         objective='val_accuracy',
-        max_trials=10,
+        max_trials=20,
         executions_per_trial=1,
         directory='tuner_dir',
         project_name='mobile_net_v2_tuning',
@@ -244,6 +241,13 @@ if __name__ == "__main__":
     # Retrieve the best model found during the search
     best_model = tuner.get_best_models(num_models=1)[0]
 
+    early_stopping = tf.keras.callbacks.EarlyStopping(
+	monitor='val_loss',
+	patience=8,
+	mode='min',
+	restore_best_weights=True,
+	)
+
     # Train the custom head
     history = best_model.fit(
         train_generator,
@@ -251,42 +255,12 @@ if __name__ == "__main__":
         epochs=args.epochs,
         validation_data=val_generator,
         validation_steps=len(val_generator),
-        class_weight=class_weights_dict
+        class_weight=class_weights_dict,
+	callbacks=[early_stopping],
     )
     # Print the best hyperparameters found
     best_hyperparameters = tuner.get_best_hyperparameters(num_trials=1)[0]
     print(f"Best hyperparameters: {best_hyperparameters.values}")
-    
-    # Fine-tune the model
-    print("Number of layers in the base model: ", len(base_model.layers))
-
-    base_model.trainable = True
-    fine_tune_at = 100
-
-    # Freeze all the layers before the `fine_tune_at` layer
-    for layer in base_model.layers[:fine_tune_at]:
-        layer.trainable = False
-
-    best_model.compile(
-        optimizer=tf.keras.optimizers.Adam(5e-5),
-        loss="categorical_crossentropy",
-        metrics=["accuracy"],
-    )
-
-    model.summary()
-
-    print(
-        "Number of trainable weights = {}".format(len(model.trainable_weights))
-    )
-
-    history_fine = best_model.fit(
-        train_generator,
-        steps_per_epoch=len(train_generator),
-        epochs=args.finetune_epochs,
-        validation_data=val_generator,
-        validation_steps=len(val_generator),
-	class_weight=class_weights_dict
-    )
 
     # Convert to TensorFlow lite
     converter = tf.lite.TFLiteConverter.from_keras_model(best_model)
