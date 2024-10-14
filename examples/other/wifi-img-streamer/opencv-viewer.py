@@ -68,65 +68,97 @@ def rx_bytes(size):
   return data
 
 import cv2
+cv2.namedWindow('JPEG', cv2.WINDOW_NORMAL)
+# Set a desired window size (e.g., 800x600)
+cv2.resizeWindow('Stream', 800, 800)
 
 start = time.time()
 count = 0
+img_corr = False
 
 
 while(1):
+    # with open('output.txt', 'a') as f:
     # First get the info
-    packetInfoRaw = rx_bytes(4)
-    # print(f"Received new info packet: {packetInfoRaw}")
+    # print(packetInfoRaw)
+    if not img_corr:
+      packetInfoRaw = rx_bytes(4)
+    else:
+       print("Image corrupted!")
+
+    # print("Info Packet: ", packetInfoRaw)
+
+    # f.write("Info packet  " + packetInfoRaw.hex() + '\n')
     if packetInfoRaw[:3] == b'\r\x00c':
       # print(f"THe packet is good!")
       [length, routing, function] = struct.unpack('<HBB', packetInfoRaw)
+      img_corr = False
       # print("Length is {}".format(length))
       # print("Route is 0x{:02X}->0x{:02X}".format(routing & 0xF, routing >> 4))
       # print("Function is 0x{:02X}".format(function))
 
       imgHeader = rx_bytes(length - 2)
+      # f.write("Image header:  " + imgHeader.hex() + '\n')
       # print(imgHeader)
       # print("Length of data is {}".format(len(imgHeader)))
       # if len(imgHeader) == 11:
       [magic, width, height, depth, format, size] = struct.unpack('<BHHBBI', imgHeader)
 
-      if magic == 0xBC:
+      # if magic == 0xBC:
         #print("Magic is good")
         #print("Resolution is {}x{} with depth of {} byte(s)".format(width, height, depth))
         #print("Image format is {}".format(format))
         #print("Image size is {} bytes".format(size))
 
         # Now we start rx the image, this will be split up in packages of some size
-        imgStream = bytearray()
+      imgStream = bytearray()
 
-        while len(imgStream) < size:
-            packetInfoRaw = rx_bytes(4)
-            [length, dst, src] = struct.unpack('<HBB', packetInfoRaw)
-            #print("Chunk size is {} ({:02X}->{:02X})".format(length, src, dst))
-            chunk = rx_bytes(length - 2)
-            imgStream.extend(chunk)
-      
-        count = count + 1
-        meanTimePerImage = (time.time()-start) / count
-        print("{}".format(meanTimePerImage))
-        print("{}".format(1/meanTimePerImage))
+      # chunk_n = 0
+      while len(imgStream) < size:
+          packetInfoRaw = rx_bytes(4)
+          # f.write(f"Chunk {chunk_n}:  " + packetInfoRaw.hex() + '\n')
+          if packetInfoRaw[:3] == b'\r\x00c':
+            img_corr = True
+            break
+          # chunk_n += 1
+          [length, dst, src] = struct.unpack('<HBB', packetInfoRaw)
+          # print("Chunk size is {} ({:02X}->{:02X})".format(length, src, dst))
+          chunk = rx_bytes(length - 2)
+          # f.write("Chunk:  " + chunk.hex() + '\n')
+          imgStream.extend(chunk)
+    
+      # count = count + 1
+      TimePerImage = round((time.time()-start),2)
+      start = time.time()
+      # print("{}".format(meanTimePerImage))
+      # print("{}".format(1/meanTimePerImage))
+      print(TimePerImage)
 
-        if format == 0:
-            if len(imgStream) == 244*324:
-              bayer_img = np.frombuffer(imgStream, dtype=np.uint8)   
-              bayer_img.shape = (244, 324)
-              # color_img = cv2.cvtColor(bayer_img, cv2.COLOR_BayerBG2BGRA)
-              cv2.imshow('Raw', bayer_img)
-              # cv2.imshow('Color', color_img)
-              if args.save:
-                  cv2.imwrite(f"stream_out/raw/img_{count:06d}.png", bayer_img)
-                  # cv2.imwrite(f"stream_out/debayer/img_{count:06d}.png", color_img)
-              cv2.waitKey(1)
-        else:
-            with open("img.jpeg", "wb") as f:
-                f.write(imgStream)
-            nparr = np.frombuffer(imgStream, np.uint8)
-            decoded = cv2.imdecode(nparr,cv2.IMREAD_UNCHANGED)
-            cv2.imshow('JPEG', decoded)
+      if format == 0:
+          if len(imgStream) == 244*324:
+            bayer_img = np.frombuffer(imgStream, dtype=np.uint8)   
+            bayer_img.shape = (162, 162)
+            # color_img = cv2.cvtColor(bayer_img, cv2.COLOR_BayerBG2BGRA)
+            cv2.imshow('Raw', bayer_img)
+            # cv2.imshow('Color', color_img)
+            if args.save:
+                cv2.imwrite(f"stream_out/raw/img_{count:06d}.png", bayer_img)
+                # cv2.imwrite(f"stream_out/debayer/img_{count:06d}.png", color_img)
             cv2.waitKey(1)
+      else:
+          with open("img.jpeg", "wb") as f:
+              f.write(imgStream)
+          nparr = np.frombuffer(imgStream, np.uint8)
+          decoded = cv2.imdecode(nparr,cv2.IMREAD_UNCHANGED)
+          try:
+            # Resize the frame to fill the window (without preserving aspect ratio)
+            resized_frame = cv2.resize(decoded, (3240, 2440), interpolation=cv2.INTER_LINEAR)
+
+            # Display the resized frame
+            cv2.imshow('JPEG', resized_frame)
+            # cv2.imshow('JPEG', decoded)
+            cv2.waitKey(1)
+          except:
+             print("Image corrupted")
+             continue
 
